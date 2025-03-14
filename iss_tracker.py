@@ -1,12 +1,12 @@
 import logging
 from datetime import datetime, timezone
-from dateutil import parser
-from flask import Flask, request, jsonify
+from typing import Any, Dict, List, Tuple, Optional
 
 import requests
 import xmltodict
+from dateutil import parser
+from flask import Flask, request, jsonify
 
-from typing import Any, Dict, List, Tuple, Optional
 
 ISS_DATA_URL = "https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml"
 
@@ -21,6 +21,25 @@ def setup_logging():
     )
 
 setup_logging()
+
+def fetch_iss_data(url) -> Optional[List[Dict[str, Any]]]:
+    """
+    Fetch ISS state vector data from NASA's API and parse it into a list of dictionaries.
+    
+    Returns:
+        Optional[List[Dict[str, Any]]]: Parsed ISS state vectors, or None if request fails.
+    """
+    try:
+        response = requests.get(url)
+        if response.ok:
+            iss_data = xmltodict.parse(response.content)
+            return parse_iss_data(iss_data)
+        else:
+            logging.error(f"Failed to fetch ISS data: {response.status_code}")
+            return None
+    except Exception as e:
+        logging.error(f"Error fetching ISS data: {e}", exc_info=True)
+        return None
 
 def parse_iss_data(xml_data: dict) -> List[Dict[str, Any]]:
     """
@@ -152,29 +171,11 @@ def cal_instantaneous_speed(epoch_data: List[Dict[str, Any]]) -> float:
 # Return entire data set
 @app.route('/epochs', methods=['GET'])
 def get_epochs():
-    try:
-        # GET request to ISS data URL
-        response = requests.get(url='https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml')
+    parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
 
-        # Check if status code 2XX
-        if response.ok:
-            # Parse the XML content and convert into a dict
-            iss_data = xmltodict.parse(response.content)
-
-            # Extract state vector information
-            parsed_iss_data = parse_iss_data(iss_data)
-
-            # Return the entire data set as JSON format
-            return jsonify(parsed_iss_data)
-
-        else:
-            # Return an error message if the request fails
-            return jsonify({"error": "Failed to fetch data"}), 500
-
-    except Exception as e:
-        # Log any errors
-        logging.error(f"Unexpected error: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+    if parsed_iss_data:
+        return jsonify(parsed_iss_data)
+    return jsonify({"error": "Failed to fetch ISS data"}), 500
 
 # Return modified list of Epochs given query parameters
 @app.route('/epochs', methods=['GET'])
@@ -187,18 +188,10 @@ def get_modified_epochs_list():
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must be non-negative integers")
 
-        response = requests.get(url='https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml')
-        
-        if response.ok:
-            iss_data = xmltodict.parse(response.content)
-            parsed_iss_data = parse_iss_data(iss_data)
+        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
 
-            # Pagination
-            modified_data = parsed_iss_data[offset:offset + limit]
-
-            return jsonify(modified_data)
-        else:
-            return jsonify({"error": f"Failed to fetch ISS data."}), 500
+        if parsed_iss_data:
+            return jsonify(parsed_iss_data[offset:offset + limit])
     
     except ValueError as ve:
         return jsonify({"error": "Invalid value for limit or offset", "details": str(ve)}), 400
@@ -211,21 +204,13 @@ def get_modified_epochs_list():
 @app.route('/epochs/<epoch>', methods=['GET'])
 def get_state_vectors_for_epoch(epoch: str):
     try:
-        response = requests.get(url='https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml')
+        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
 
-        if response.ok:
-            iss_data = xmltodict.parse(response.content)
-            parsed_iss_data = parse_iss_data(iss_data)
-
-            # Find data for the specified epoch
-            epoch_data = [data_point for data_point in parsed_iss_data if data_point["EPOCH"] == epoch]
-            
+        if parsed_iss_data:
+            epoch_data = [data for data in parsed_iss_data if data["EPOCH"] == epoch]
             if epoch_data:
                 return jsonify(epoch_data)
-            else:
-                return jsonify({"error": f"No data found for the specified epoch: {epoch}"}), 404
-        else:
-            return jsonify({"error": f"Failed to fetch ISS data."}), 500
+        return jsonify({"error": f"No data found for the specified epoch: {epoch}"}), 404
 
     except Exception as e:
         logging.error("Unexpected error occurred", exc_info=True)
@@ -235,23 +220,14 @@ def get_state_vectors_for_epoch(epoch: str):
 @app.route('/epochs/<epoch>/speed', methods=['GET'])
 def get_instantaneous_speed_for_epoch(epoch: str):
     try:
-        response = requests.get(url='https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml')
+        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
 
-        if response.ok:
-            iss_data = xmltodict.parse(response.content)
-            parsed_iss_data = parse_iss_data(iss_data)
-
-            # Find data for the specified epoch
-            epoch_data = [data_point for data_point in parsed_iss_data if data_point["EPOCH"] == epoch]
-
+        if parsed_iss_data:
+            epoch_data = [data for data in parsed_iss_data if data["EPOCH"] == epoch]
             if epoch_data:
-                # Cal instantaneous speed for the specified epoch
                 speed = cal_instantaneous_speed(epoch_data[0])
                 return jsonify({"instantaneous_speed": speed})
-            else:
-                return jsonify({"error": f"No data found for the specified epoch: {epoch}"}), 404
-        else:
-            return jsonify({"error": "Failed to fetch ISS data."}), 500
+            return jsonify({"error": f"No data found for the specified epoch: {epoch}"}), 404
 
     except Exception as e:
         logging.error("Unexpected error occurred", exc_info=True)
@@ -261,21 +237,17 @@ def get_instantaneous_speed_for_epoch(epoch: str):
 @app.route('/now', methods=['GET'])
 def get_nearest_epoch():
     try:
-        response = requests.get(url='https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml')
+        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
 
-        if response.ok:
-            iss_data = xmltodict.parse(response.content)
-            parsed_iss_data = parse_iss_data(iss_data)
-
+        if parsed_iss_data:
             # Find the closest data point to 'now'
             closest_data_point = get_closest_data_point(parsed_iss_data)
 
             # Calculate and include instantaneous speed closest to 'now'
             closest_data_point["instantaneous_speed"] = cal_instantaneous_speed(closest_data_point)
-
+            
             return jsonify(closest_data_point)
-        else:
-            return jsonify({"error": "Failed to fetch ISS data."}), 500
+        return jsonify({"error": "Failed to fetch ISS data"}), 500
 
     except Exception as e:
         logging.error("Unexpected error occurred", exc_info=True)
