@@ -1,9 +1,11 @@
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple, Optional
+import json
 
 import requests
 import xmltodict
+import redis
 from dateutil import parser
 from flask import Flask, request, jsonify
 
@@ -11,6 +13,8 @@ from flask import Flask, request, jsonify
 ISS_DATA_URL = "https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.xml"
 
 app = Flask(__name__)
+
+r = redis.Redis(host='redis', port=6379, decode_responses=True) # Redis (b'string') decode responses into strings
 
 def setup_logging():
     logging.basicConfig(
@@ -33,7 +37,12 @@ def fetch_iss_data(url) -> Optional[List[Dict[str, Any]]]:
         response = requests.get(url)
         if response.ok:
             iss_data = xmltodict.parse(response.content)
-            return parse_iss_data(iss_data)
+            parsed_iss_data = parse_iss_data(iss_data)
+
+            # Store data in redis db
+            r.set("iss_data", json.dumps(parsed_iss_data))
+            logger.info(f"Loaded state vectors into redis db.")
+            return parsed_iss_data
         else:
             logging.error(f"Failed to fetch ISS data: {response.status_code}")
             return None
@@ -90,6 +99,23 @@ def parse_iss_data(xml_data: dict) -> List[Dict[str, Any]]:
     except Exception as e:
         logging.error(f"Error parsing ISS data: {e}")
         return []
+
+def get_iss_data_cached() -> List[Dict[str, Any]]:
+    """
+    Retrieve cached ISS data from Redis. If not available, fetch from the ISS data.
+
+    Args:
+        None
+
+    Returns:
+        iss_data (List[Dict[str, Any]]): A list of ISS data dictionaries if available.
+    """
+    data = r.get("iss_data")
+    if data:
+        logger.info("ISS data loaded from redis db.")
+        return json.loads(data)
+    logger.info("No ISS data found in redis db, fetching from ISS")
+    return fetch_iss_data()
 
 def get_time_range(iss_data: List[Dict[str, Any]]) -> Tuple[datetime, datetime]:
     """
