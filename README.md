@@ -1,74 +1,202 @@
-# ISS Tracker with Flask and Redis
+# Homework 05: The Fountains of Flask
 
-## Overview
-This project is a Flask-based API that tracks the International Space Station (ISS) using real-time data. The application stores ISS positional data in a Redis database and provides multiple routes to retrieve information about the ISS’s location and speed.
+This Flask-based API provides access to real-time International Space Station (ISS) position data, parsed from NASA's public XML feed. The API allows querying:
 
-## Features
-- Retrieves ISS position data from an external API.
-- Stores ISS data in a Redis container for persistence.
-- Provides RESTful API endpoints to fetch ISS speed, position, and historical data.
-- Containerized with Docker and orchestrated using Docker Compose.
+- Retrieve entire ISS data
+- Retrieve data for a specific epoch
+- Calculate instantaneous speed of a a specific epoch
+- Get the closest epoch to the current time
 
-## Setup and Deployment
+## Project Structure
 
-### Prerequisites
-- Docker and Docker Compose installed.
+- `iss_tracker.py`: Reads the XML file and prints summary statistics of the input file.
+- `test_iss_tracker.py`: Tests for functions in the main script.
+- `Dockerfile`: Docker configuration file for containerization.
+- `requirements.txt`: List of Python dependencies.
 
-### Installation & Running
-1. Clone this repository:
-   ```sh
-   git clone <repo-url>
-   cd iss-tracker
-   ```
-2. Build and start the application using Docker Compose:
-   ```sh
-   docker-compose up --build
-   ```
-3. The Flask API will be available at `http://localhost:5000`.
+## Data Source
+
+The dataset contains state vectors describing the ISS's position {X, Y, Z} and velocity {X_DOT, Y_DOT, Z_DOT} over a 15-day period. These vectors use the J2000 reference frame, with Earth as the reference point. The ISS data set is retrieved in real-time from NASA's website. Get the dataset here:
+
+[International Space Station](https://spotthestation.nasa.gov/trajectory_data.cfm)
+
+## Run Scripts
+
+1. Clone the repository
+```
+git clone https://github.com/Jasmineeds/coe332-jasmine.git
+```
+
+2. Navigate to the homework04 directory
+```
+cd homework05
+```
+
+3. Build the Docker Container
+```
+docker build -t iss-tracker .
+```
+
+4. Run the Flask Server
+```bash
+flask --app iss_tracker --debug run --port=5000
+```
+
+The server will start in debug mode on the default port 5000.
 
 ## API Endpoints
 
-### 1. Get all epochs
-```sh
-curl http://localhost:5000/epochs
-```
-Returns all available epochs from the dataset.
+### Get All Epochs
 
-### 2. Get a specific epoch
-```sh
-curl http://localhost:5000/epochs/<epoch>
 ```
-Returns state vectors for the given epoch.
-
-### 3. Get speed for a specific epoch
-```sh
-curl http://localhost:5000/epochs/<epoch>/speed
-```
-Returns the instantaneous speed of the ISS at the given epoch.
-
-### 4. Get location for a specific epoch
-```sh
-curl http://localhost:5000/epochs/<epoch>/location
-```
-Returns latitude, longitude, altitude, and geolocation for the given epoch.
-
-### 5. Get current ISS location
-```sh
-curl http://localhost:5000/now
-```
-Returns the current position, altitude, and speed of the ISS.
-
-## Running Tests
-To run the unit tests inside the container:
-```sh
-docker exec flask_container pytest
+GET /epochs
 ```
 
-## Data Source
-ISS data is retrieved from [Open Notify](http://api.open-notify.org/iss-now.json).
+Returns the entire dataset of state vectors for all available time epochs.
 
-## Diagram
-A software architecture diagram (`diagram.png`) is included in this repository, illustrating how the Flask app, Redis, and external API interact.
+**Response Format:**
+```json
+[
+  {
+    "EPOCH": "2023-048T12:00:00.000Z",
+    "X": 2345.67,
+    "Y": 3456.78,
+    "Z": 4567.89,
+    "X_DOT": 5.67,
+    "Y_DOT": 6.78,
+    "Z_DOT": 7.89
+  },
+  ...
+]
+```
 
-## License
-This project follows standard open-source licensing practices.
+### Get Epochs with Pagination
+
+```
+GET /epochs?limit=<int>&offset=<int>
+```
+
+Returns a subset of the epochs data with pagination support.
+
+**Query Parameters:**
+- `limit` (optional): Number of records to return (default: 5)
+- `offset` (optional): Number of records to skip (default: 0)
+
+**Example:**
+```
+GET /epochs?limit=10&offset=5
+```
+
+### Get State Vector for a Specific Epoch
+
+```
+GET /epochs/<epoch>
+```
+
+Returns the state vector for a specific epoch.
+
+**Example:**
+```
+GET /epochs/2023-048T12:00:00.000Z
+```
+
+**Response Format:**
+```json
+[
+  {
+    "EPOCH": "2023-048T12:00:00.000Z",
+    "X": 2345.67,
+    "Y": 3456.78,
+    "Z": 4567.89,
+    "X_DOT": 5.67,
+    "Y_DOT": 6.78,
+    "Z_DOT": 7.89
+  }
+]
+```
+
+### Get Instantaneous Speed for a Specific Epoch
+
+```
+GET /epochs/<epoch>/speed
+```
+
+Returns the instantaneous speed of the ISS at a specific epoch.
+
+**Example:**
+```
+GET /epochs/2023-048T12:00:00.000Z/speed
+```
+
+**Response Format:**
+```json
+{
+  "instantaneous_speed": 7.82
+}
+```
+
+### Get Current ISS Data
+
+```
+GET /now
+```
+
+Returns the state vector and instantaneous speed for the epoch that is nearest to the current time.
+
+**Response Format:**
+```json
+{
+  "EPOCH": "2023-048T12:00:00.000Z",
+  "X": 2345.67,
+  "Y": 3456.78,
+  "Z": 4567.89,
+  "X_DOT": 5.67,
+  "Y_DOT": 6.78,
+  "Z_DOT": 7.89,
+  "instantaneous_speed": 7.82
+}
+```
+
+## Data Model
+
+Each state vector contains the following components:
+
+| Field | Description |
+|-------|-------------|
+| EPOCH | Timestamp in format YYYY-DDDTHH:MM:SS.sssZ |
+| X | X coordinate in km |
+| Y | Y coordinate in km |
+| Z | Z coordinate in km |
+| X_DOT | Velocity in X direction in km/s |
+| Y_DOT | Velocity in Y direction in km/s |
+| Z_DOT | Velocity in Z direction in km/s |
+
+## Error Handling
+
+The API returns appropriate HTTP status codes and error messages:
+
+- `400 Bad Request`: Invalid parameters (e.g., negative limit or offset)
+- `404 Not Found`: Requested epoch not found
+- `500 Internal Server Error`: Server-side errors
+
+## Logging
+
+The application logs errors to `iss_tracker.log` with the following format:
+```
+YYYY-MM-DD HH:MM:SS - ERROR - Error message
+```
+
+## Technical Details
+
+- Built with Flask
+- Uses `requests` for HTTP calls
+- Uses `xmltodict` for XML parsing
+- Uses `dateutil` for date parsing and timezone handling
+
+## Note on Using AI
+I used AI to understand the following things:
+
+- How to use jsonify
+- How to change the port
+- How to create tables in a README file
+- The format of status codes
