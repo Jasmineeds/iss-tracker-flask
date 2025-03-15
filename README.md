@@ -5,6 +5,7 @@ This Flask-based API provides access to real-time International Space Station (I
 - Retrieve entire ISS data
 - Retrieve data for a specific epoch
 - Calculate instantaneous speed of a a specific epoch
+- Get the latitude, longitude, altitude, and geoposition for a specific epoch
 - Get the closest epoch to the current time
 
 ## Project Structure
@@ -12,6 +13,7 @@ This Flask-based API provides access to real-time International Space Station (I
 - `iss_tracker.py`: Reads the XML file and prints summary statistics of the input file.
 - `test_iss_tracker.py`: Tests for functions in the main script.
 - `Dockerfile`: Docker configuration file for containerization.
+- `docker-compose.yml`: Configuration file that defines and runs multi-container Docker applications, including the Flask API and Redis service.
 - `requirements.txt`: List of Python dependencies.
 
 ## Data Source
@@ -24,25 +26,20 @@ The dataset contains state vectors describing the ISS's position {X, Y, Z} and v
 
 1. Clone the repository
 ```
-git clone https://github.com/Jasmineeds/coe332-jasmine.git
+git clone https://github.com/Jasmineeds/iss-tracker-flask.git
 ```
 
-2. Navigate to the homework04 directory
+2. Navigate to the directory
 ```
-cd homework05
-```
-
-3. Build the Docker Container
-```
-docker build -t iss-tracker .
+cd iss-tracker-flask
 ```
 
-4. Run the Flask Server
-```bash
-flask --app iss_tracker --debug run --port=5000
+3. Build the Containers
+```
+docker-compose up --build
 ```
 
-The server will start in debug mode on the default port 5000.
+The server will start in debug mode on ```https://localhost:5000```.
 
 ## API Endpoints
 
@@ -135,6 +132,26 @@ GET /epochs/2023-048T12:00:00.000Z/speed
 }
 ```
 
+### Get Instantaneous Speed for a Specific Epoch
+
+```
+GET /epochs/<epoch>/location
+```
+
+Returns the latitude, longitude, altitude, and geoposition of a given epoch.
+
+**Example:**
+```
+GET /epochs/2023-048T12:00:00.000Z/location
+```
+
+**Response Format:**
+```json
+{
+  "instantaneous_speed": 7.82
+}
+```
+
 ### Get Current ISS Data
 
 ```
@@ -157,46 +174,20 @@ Returns the state vector and instantaneous speed for the epoch that is nearest t
 }
 ```
 
-## Data Model
+## Software Diagram
+The diagram below illustrates the key components and data flow of the ISS Tracker:
 
-Each state vector contains the following components:
+- **User Requests:** Clients interact with the system by sending API requests to the Flask server.
+- **NASA APIs:** Third-party data sources providing ISS trajectory data.
+- **Flask APIs:** The logic that processes requests and retrieves ISS data.
+- **Redis Database:** Caches ISS trajectory data to improve response times and reduce external API calls.
+- **Docker Containers:** The Flask API and Redis database run within Docker containers, ensuring portability and simplified deployment.
 
-| Field | Description |
-|-------|-------------|
-| EPOCH | Timestamp in format YYYY-DDDTHH:MM:SS.sssZ |
-| X | X coordinate in km |
-| Y | Y coordinate in km |
-| Z | Z coordinate in km |
-| X_DOT | Velocity in X direction in km/s |
-| Y_DOT | Velocity in Y direction in km/s |
-| Z_DOT | Velocity in Z direction in km/s |
-
-## Error Handling
-
-The API returns appropriate HTTP status codes and error messages:
-
-- `400 Bad Request`: Invalid parameters (e.g., negative limit or offset)
-- `404 Not Found`: Requested epoch not found
-- `500 Internal Server Error`: Server-side errors
-
-## Logging
-
-The application logs errors to `iss_tracker.log` with the following format:
-```
-YYYY-MM-DD HH:MM:SS - ERROR - Error message
-```
-
-## Technical Details
-
-- Built with Flask
-- Uses `requests` for HTTP calls
-- Uses `xmltodict` for XML parsing
-- Uses `dateutil` for date parsing and timezone handling
+![Software Diagram](diagram.png)
 
 ## Note on Using AI
 I used AI to understand the following things:
 
-- How to use jsonify
-- How to change the port
-- How to create tables in a README file
-- The format of status codes
+- Optimized docker-compose.yml
+- Diagnosed Redis connection issues and improved caching logic
+- Ensured correct data flow between Flask, Redis, and external APIs.
