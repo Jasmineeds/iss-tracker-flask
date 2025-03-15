@@ -6,6 +6,8 @@ import json
 import requests
 import xmltodict
 import redis
+import math
+from geopy.geocoders import Nominatim
 from dateutil import parser
 from flask import Flask, request, jsonify
 
@@ -14,19 +16,19 @@ ISS_DATA_URL = "https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS
 
 app = Flask(__name__)
 
-r = redis.Redis(host='redis', port=6379, decode_responses=True) # Redis (b'string') decode responses into strings
+r = redis.Redis(host='redis-db', port=6379, db=0, decode_responses=True) # Redis (b'string') decode responses into strings
 
 def setup_logging():
     logging.basicConfig(
         filename="iss_tracker.log",
-        level=logging.ERROR,
+        level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
 setup_logging()
 
-def fetch_iss_data(url) -> Optional[List[Dict[str, Any]]]:
+def fetch_iss_data() -> Optional[List[Dict[str, Any]]]:
     """
     Fetch ISS state vector data from NASA's API and parse it into a list of dictionaries.
     
@@ -34,11 +36,12 @@ def fetch_iss_data(url) -> Optional[List[Dict[str, Any]]]:
         Optional[List[Dict[str, Any]]]: Parsed ISS state vectors, or None if request fails.
     """
     try:
-        response = requests.get(url)
+        response = requests.get(ISS_DATA_URL)
+
         if response.ok:
             iss_data = xmltodict.parse(response.content)
             parsed_iss_data = parse_iss_data(iss_data)
-
+            
             # Store data in redis db
             r.set("iss_data", json.dumps(parsed_iss_data))
             logger.info(f"Loaded state vectors into redis db.")
@@ -197,10 +200,10 @@ def cal_instantaneous_speed(epoch_data: List[Dict[str, Any]]) -> float:
 # Return entire data set
 @app.route('/epochs', methods=['GET'])
 def get_epochs():
-    parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
+    data = get_iss_data_cached()
 
-    if parsed_iss_data:
-        return jsonify(parsed_iss_data)
+    if data:
+        return jsonify(data)
     return jsonify({"error": "Failed to fetch ISS data"}), 500
 
 # Return modified list of Epochs given query parameters
@@ -214,10 +217,11 @@ def get_modified_epochs_list():
         if limit < 0 or offset < 0:
             raise ValueError("limit and offset must be non-negative integers")
 
-        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
+        data = get_iss_data_cached()
 
-        if parsed_iss_data:
-            return jsonify(parsed_iss_data[offset:offset + limit])
+        if data:
+            result = data[offset:offset + limit]
+            return jsonify(result)
     
     except ValueError as ve:
         return jsonify({"error": "Invalid value for limit or offset", "details": str(ve)}), 400
@@ -230,7 +234,7 @@ def get_modified_epochs_list():
 @app.route('/epochs/<epoch>', methods=['GET'])
 def get_state_vectors_for_epoch(epoch: str):
     try:
-        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
+        parsed_iss_data = get_iss_data_cached()
 
         if parsed_iss_data:
             epoch_data = [data for data in parsed_iss_data if data["EPOCH"] == epoch]
@@ -246,7 +250,7 @@ def get_state_vectors_for_epoch(epoch: str):
 @app.route('/epochs/<epoch>/speed', methods=['GET'])
 def get_instantaneous_speed_for_epoch(epoch: str):
     try:
-        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
+        parsed_iss_data = get_iss_data_cached()
 
         if parsed_iss_data:
             epoch_data = [data for data in parsed_iss_data if data["EPOCH"] == epoch]
@@ -259,11 +263,46 @@ def get_instantaneous_speed_for_epoch(epoch: str):
         logging.error("Unexpected error occurred", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
+# Return latitude, longitude, altitude, and geoposition for a specific Epoch in the data set
+@app.route('/epochs/<epoch>/location', methods=['GET'])
+def get_epoch_location(epoch):
+    data = get_iss_data_cached()
+
+    state = next((s for s in data if s.get("epoch") == epoch), None)
+
+    if state is None:
+        return jsonify({"error": "Epoch not found"}), 404
+
+    position = state.get("position", {})
+    x, y, z = position.get("x", 0), position.get("y", 0), position.get("z", 0)
+    
+    xy_sqrt = math.sqrt(x**2 + y**2)
+    latitude = math.degrees(math.atan2(z, xy_sqrt))
+    longitude = math.degrees(math.atan2(y, x))
+    altitude = math.sqrt(x**2 + y**2 + z**2) - 6371  # Earth's radius in km
+
+    geolocator = Nominatim(user_agent="iss_tracker")
+    
+    try:
+        location = geolocator.reverse((latitude, longitude), language="en", exactly_one=True)
+        geoposition = location.address if location else "Unknown"
+    except Exception as e:
+        print(f"Geolocation error: {e}")
+        geoposition = "Unknown"
+
+    return jsonify({
+        "epoch": epoch,
+        "latitude": latitude,
+        "longitude": longitude,
+        "altitude_km": altitude,
+        "geoposition": geoposition
+    })
+
 # Route to get state vectors and instantaneous speed for the Epoch that is nearest in time
 @app.route('/now', methods=['GET'])
 def get_nearest_epoch():
     try:
-        parsed_iss_data = fetch_iss_data(ISS_DATA_URL)
+        parsed_iss_data = fetch_iss_data()
 
         if parsed_iss_data:
             # Find the closest data point to 'now'
@@ -271,7 +310,7 @@ def get_nearest_epoch():
 
             # Calculate and include instantaneous speed closest to 'now'
             closest_data_point["instantaneous_speed"] = cal_instantaneous_speed(closest_data_point)
-            
+
             return jsonify(closest_data_point)
         return jsonify({"error": "Failed to fetch ISS data"}), 500
 
