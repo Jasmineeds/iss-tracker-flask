@@ -1,4 +1,4 @@
-# Homework 05: The Fountains of Flask
+# The Sands of Midterm - ISS Tracker
 
 This Flask-based API provides access to real-time International Space Station (ISS) position data, parsed from NASA's public XML feed. The API allows querying:
 
